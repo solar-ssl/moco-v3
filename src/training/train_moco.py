@@ -1,0 +1,225 @@
+"""
+Main training script for MoCo v3 pretraining.
+Supports multi-GPU via DistributedDataParallel (DDP).
+"""
+
+import argparse
+import os
+import random
+import time
+import math
+import numpy as np
+
+import torch
+import torch.nn as nn
+import torch.nn.parallel
+import torch.backends.cudnn as cudnn
+import torch.distributed as dist
+import torch.optim
+import torch.multiprocessing as mp
+import torch.utils.data
+import torch.utils.data.distributed
+
+from src.config import Config
+from src.datasets.pv03_ssl import PV03SSLDataset
+from src.models.moco_v3 import MoCoV3
+from src.models.backbones import get_backbone
+from src.utils.augmentations import get_moco_v3_augmentations, TwoCropsTransform
+from src.utils.logging import AverageMeter, ProgressMeter
+from src.utils.checkpoints import save_checkpoint
+
+def get_args():
+    parser = argparse.ArgumentParser(description='PyTorch MoCo v3 Training')
+    parser.add_argument('--dist-url', default='tcp://127.0.0.1:23456', type=str,
+                        help='url used to set up distributed training')
+    parser.add_argument('--world-size', default=1, type=int,
+                        help='number of nodes for distributed training')
+    parser.add_argument('--rank', default=0, type=int,
+                        help='node rank for distributed training')
+    parser.add_argument('--multiprocessing-distributed', action='store_true',
+                        help='Use multi-processing distributed training to launch '
+                             'N processes per node, which has N GPUs. This is the '
+                             'fastest way to use PyTorch for either single node or '
+                             'multi node data parallel training')
+    return parser.parse_args()
+
+def main():
+    args = get_args()
+    config = Config()
+
+    if config.seed is not None:
+        random.seed(config.seed)
+        torch.manual_seed(config.seed)
+        cudnn.deterministic = True
+        np.random.seed(config.seed)
+
+    ngpus_per_node = torch.cuda.device_count()
+    if args.multiprocessing_distributed:
+        # Since we have ngpus_per_node processes per node, the total world_size
+        # needs to be adjusted accordingly
+        args.world_size = ngpus_per_node * args.world_size
+        # Use torch.multiprocessing.spawn to launch distributed processes: the
+        # main_worker process function
+        mp.spawn(main_worker, nprocs=ngpus_per_node, args=(ngpus_per_node, args, config))
+    else:
+        # Simply call main_worker function
+        main_worker(0, ngpus_per_node, args, config)
+
+def main_worker(gpu, ngpus_per_node, args, config):
+    args.gpu = gpu
+
+    if args.gpu is not None:
+        print(f"Use GPU: {args.gpu} for training")
+
+    if args.multiprocessing_distributed:
+        # For multiprocessing distributed training, rank needs to be the
+        # global rank among all the processes
+        args.rank = args.rank * ngpus_per_node + gpu
+        dist.init_process_group(backend='nccl', init_method=args.dist_url,
+                                world_size=args.world_size, rank=args.rank)
+
+    # Create model
+    print(f"=> creating model with {config.backbone} backbone")
+    def backbone_fn():
+        return get_backbone(config.backbone)
+
+    model = MoCoV3(
+        backbone_fn,
+        dim=config.feature_dim,
+        mlp_dim=config.mlp_dim,
+        T=config.temperature,
+        m=config.momentum
+    )
+
+    if args.multiprocessing_distributed:
+        # For multiprocessing distributed, DistributedDataParallel constructor
+        # should always set the single device scope, otherwise,
+        # DistributedDataParallel will use all available devices.
+        if args.gpu is not None:
+            torch.cuda.set_device(args.gpu)
+            model.cuda(args.gpu)
+            # When using a single GPU per process and per
+            # DistributedDataParallel, we need to divide the batch size
+            # ourselves based on the total number of GPUs of the current node.
+            config.batch_size = int(config.batch_size / ngpus_per_node)
+            config.num_workers = int((config.num_workers + ngpus_per_node - 1) / ngpus_per_node)
+            model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu])
+        else:
+            model.cuda()
+            # DistributedDataParallel will divide and allocate batch_size to all
+            # available GPUs if device_ids are not set
+            model = torch.nn.parallel.DistributedDataParallel(model)
+    elif args.gpu is not None:
+        torch.cuda.set_device(args.gpu)
+        model = model.cuda(args.gpu)
+    else:
+        # All-reduce survey (comment out if not needed)
+        model = model.cuda()
+
+    optimizer = torch.optim.SGD(model.parameters(), config.learning_rate,
+                                momentum=0.9,
+                                weight_decay=config.weight_decay)
+
+    cudnn.benchmark = True
+
+    # Data loading code
+    traindir = config.dataset_path
+    
+    train_dataset = PV03SSLDataset(
+        traindir,
+        TwoCropsTransform(get_moco_v3_augmentations(config.image_size))
+    )
+
+    if args.multiprocessing_distributed:
+        train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset)
+    else:
+        train_sampler = None
+
+    train_loader = torch.utils.data.DataLoader(
+        train_dataset, batch_size=config.batch_size, shuffle=(train_sampler is None),
+        num_workers=config.num_workers, pin_memory=True, sampler=train_sampler, drop_last=True)
+
+    for epoch in range(config.epochs):
+        if args.multiprocessing_distributed:
+            train_sampler.set_epoch(epoch)
+
+        # Train for one epoch
+        train(train_loader, model, optimizer, epoch, args, config)
+
+        if not args.multiprocessing_distributed or (args.multiprocessing_distributed
+                and args.rank % ngpus_per_node == 0):
+            if (epoch + 1) % config.save_freq == 0:
+                save_checkpoint({
+                    'epoch': epoch + 1,
+                    'arch': config.backbone,
+                    'state_dict': model.state_dict(),
+                    'optimizer': optimizer.state_dict(),
+                }, is_best=False, filename=f'moco_pv03_{epoch+1}.pth', checkpoint_dir=config.checkpoint_dir)
+
+def train(train_loader, model, optimizer, epoch, args, config):
+    batch_time = AverageMeter('Time', ':6.3f')
+    data_time = AverageMeter('Data', ':6.3f')
+    losses = AverageMeter('Loss', ':.4e')
+    progress = ProgressMeter(
+        len(train_loader),
+        [batch_time, data_time, losses],
+        prefix="Epoch: [{}]".format(epoch))
+
+    # Switch to train mode
+    model.train()
+
+    end = time.time()
+    for i, (images) in enumerate(train_loader):
+        # Measure data loading time
+        data_time.update(time.time() - end)
+
+        # Adjust learning rate and momentum
+        cur_lr = adjust_learning_rate(optimizer, epoch, i, len(train_loader), config)
+        cur_m = adjust_moco_momentum(epoch, i, len(train_loader), config)
+
+        if args.gpu is not None:
+            images[0] = images[0].cuda(args.gpu, non_blocking=True)
+            images[1] = images[1].cuda(args.gpu, non_blocking=True)
+
+        # Compute output and loss
+        loss = model(images[0], images[1], cur_m)
+
+        # Record loss
+        losses.update(loss.item(), images[0].size(0))
+
+        # Compute gradient and do SGD step
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+        # Measure elapsed time
+        batch_time.update(time.time() - end)
+        end = time.time()
+
+        if i % 10 == 0:
+            progress.display(i)
+
+def adjust_learning_rate(optimizer, epoch, i, iter_per_epoch, config):
+    """Decay the learning rate with half-cycle cosine after warmup"""
+    T = epoch * iter_per_epoch + i
+    warmup_iters = 10 * iter_per_epoch  # 10 epochs of warmup
+    T_max = config.epochs * iter_per_epoch
+    
+    if T < warmup_iters:
+        lr = config.learning_rate * T / warmup_iters
+    else:
+        lr = config.learning_rate * 0.5 * (1. + math.cos(math.pi * (T - warmup_iters) / (T_max - warmup_iters)))
+    
+    for param_group in optimizer.param_groups:
+        param_group['lr'] = lr
+    return lr
+
+def adjust_moco_momentum(epoch, i, iter_per_epoch, config):
+    """Cosine schedule for MoCo momentum"""
+    T = epoch * iter_per_epoch + i
+    T_max = config.epochs * iter_per_epoch
+    m = 1. - 0.5 * (1. - config.momentum) * (1. + math.cos(math.pi * T / T_max))
+    return m
+
+if __name__ == '__main__':
+    main()
