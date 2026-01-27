@@ -24,7 +24,7 @@ class PV03SSLDataset(Dataset):
         
         # List all image files in the directory
         self.image_files = [f for f in os.listdir(root_dir) 
-                           if f.lower().endswith(('.png', '.jpg', '.jpeg', '.tif', '.tiff'))]
+                           if f.lower().endswith(('.png', '.jpg', '.jpeg', '.tif', '.tiff', '.bmp'))]
         
         if not self.image_files:
             raise FileNotFoundError(f"No image files found in {root_dir}")
