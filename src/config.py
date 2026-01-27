@@ -18,9 +18,9 @@ class Config:
     mlp_dim: int = 4096
     
     # Training settings
-    batch_size: int = 128  # Total batch size (64 per GPU for 2 GPUs)
+    batch_size: int = 64  # Total batch size (32 per GPU for 2 GPUs)
     epochs: int = 100
-    learning_rate: float = 0.03
+    learning_rate: float = 0.015
     momentum: float = 0.99
     temperature: float = 0.2
     weight_decay: float = 1e-4
