@@ -9,7 +9,7 @@ from typing import Tuple
 @dataclass
 class Config:
     # Dataset settings
-    dataset_path: str = "dataset/original"
+    dataset_path: str = "dataset"
     image_size: int = 512
     
     # Model settings

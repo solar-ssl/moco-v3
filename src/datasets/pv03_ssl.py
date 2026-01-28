@@ -19,21 +19,21 @@ class PV03SSLDataset(Dataset):
             root_dir: Directory with all the images.
             transform: Optional transform to be applied on a sample.
         """
-        self.root_dir = root_dir
+        self.img_dir = os.path.join(root_dir, "original")
         self.transform = transform
         
         # List all image files in the directory
-        self.image_files = [f for f in os.listdir(root_dir) 
+        self.image_files = [f for f in os.listdir(self.img_dir)
                            if f.lower().endswith(('.png', '.jpg', '.jpeg', '.tif', '.tiff', '.bmp'))]
         
         if not self.image_files:
-            raise FileNotFoundError(f"No image files found in {root_dir}")
+            raise FileNotFoundError(f"No image files found in {self.img_dir}")
 
     def __len__(self) -> int:
         return len(self.image_files)
 
     def __getitem__(self, idx: int):
-        img_name = os.path.join(self.root_dir, self.image_files[idx])
+        img_name = os.path.join(self.img_dir, self.image_files[idx])
         image = Image.open(img_name).convert('RGB')
 
         if self.transform:
