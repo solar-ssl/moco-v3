@@ -36,3 +36,9 @@ class Config:
     checkpoint_dir: str = "checkpoints"
     checkpoint_name: str = "moco_pv03.pth"
     save_freq: int = 10
+
+    def get_experiment_tag(self) -> str:
+        """Returns a concise tag for the current experiment configuration."""
+        # Abbreviate backbone
+        bb = "r50" if "resnet50" in self.backbone else self.backbone.replace("vit_", "v")
+        return f"{bb}_bs{self.batch_size}_lr{self.learning_rate}_ep{self.epochs}"

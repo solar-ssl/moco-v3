@@ -5,7 +5,7 @@ Checkpointing utilities for saving and loading models.
 import os
 import torch
 
-def save_checkpoint(state, is_best, filename='checkpoint.pth.tar', checkpoint_dir='checkpoints'):
+def save_checkpoint(state, is_best, filename='checkpoint.pth.tar', best_filename='model_best.pth.tar', checkpoint_dir='checkpoints'):
     """Saves the training state."""
     if not os.path.exists(checkpoint_dir):
         os.makedirs(checkpoint_dir)
@@ -13,7 +13,7 @@ def save_checkpoint(state, is_best, filename='checkpoint.pth.tar', checkpoint_di
     filepath = os.path.join(checkpoint_dir, filename)
     torch.save(state, filepath)
     if is_best:
-        best_path = os.path.join(checkpoint_dir, 'model_best.pth.tar')
+        best_path = os.path.join(checkpoint_dir, best_filename)
         torch.save(state, best_path)
 
 def load_checkpoint(model, optimizer, filename):

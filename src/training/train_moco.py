@@ -9,6 +9,7 @@ import random
 import time
 import math
 import numpy as np
+from tqdm import tqdm
 
 import torch
 import torch.nn as nn
@@ -139,34 +140,49 @@ def main_worker(gpu, ngpus_per_node, args, config):
         train_dataset, batch_size=config.batch_size, shuffle=(train_sampler is None),
         num_workers=config.num_workers, pin_memory=True, sampler=train_sampler, drop_last=True)
 
+    min_loss = float('inf')
+
     for epoch in range(config.epochs):
         if args.multiprocessing_distributed:
             train_sampler.set_epoch(epoch)
 
         # Train for one epoch
-        train(train_loader, model, optimizer, epoch, args, config)
+        avg_loss = train(train_loader, model, optimizer, epoch, args, config)
 
+        # Check for best model (only on main process)
         if not args.multiprocessing_distributed or (args.multiprocessing_distributed
                 and args.rank % ngpus_per_node == 0):
-            if (epoch + 1) % config.save_freq == 0:
-                save_checkpoint({
-                    'epoch': epoch + 1,
-                    'arch': config.backbone,
-                    'state_dict': model.state_dict(),
-                    'optimizer': optimizer.state_dict(),
-                }, is_best=False, filename=f'moco_pv03_{epoch+1}.pth', checkpoint_dir=config.checkpoint_dir)
+            
+            is_best = avg_loss < min_loss
+            min_loss = min(avg_loss, min_loss)
+
+            # Define experiment-specific directory
+            exp_tag = config.get_experiment_tag()
+            exp_dir = os.path.join(config.checkpoint_dir, exp_tag)
+
+            # Save 'last.pth' every epoch, and 'best.pth' if improved
+            save_checkpoint({
+                'epoch': epoch + 1,
+                'arch': config.backbone,
+                'state_dict': model.state_dict(),
+                'optimizer': optimizer.state_dict(),
+                'loss': avg_loss,
+            }, is_best=is_best, filename='last.pth', best_filename='best.pth', checkpoint_dir=exp_dir)
 
 def train(train_loader, model, optimizer, epoch, args, config):
     batch_time = AverageMeter('Time', ':6.3f')
     data_time = AverageMeter('Data', ':6.3f')
     losses = AverageMeter('Loss', ':.4e')
-    progress = ProgressMeter(
-        len(train_loader),
-        [batch_time, data_time, losses],
-        prefix="Epoch: [{}]".format(epoch))
-
+    
     # Switch to train mode
     model.train()
+
+    # Use tqdm only on the main process
+    is_main_process = not args.multiprocessing_distributed or (args.multiprocessing_distributed and args.rank % torch.cuda.device_count() == 0)
+    
+    pbar = None
+    if is_main_process:
+        pbar = tqdm(total=len(train_loader), desc=f"Epoch [{epoch}]")
 
     end = time.time()
     for i, (images) in enumerate(train_loader):
@@ -196,8 +212,14 @@ def train(train_loader, model, optimizer, epoch, args, config):
         batch_time.update(time.time() - end)
         end = time.time()
 
-        if i % 10 == 0:
-            progress.display(i)
+        if pbar:
+            pbar.update(1)
+            pbar.set_postfix({'loss': f"{losses.avg:.4f}", 'lr': f"{cur_lr:.5f}"})
+
+    if pbar:
+        pbar.close()
+            
+    return losses.avg
 
 def adjust_learning_rate(optimizer, epoch, i, iter_per_epoch, config):
     """Decay the learning rate with half-cycle cosine after warmup"""
