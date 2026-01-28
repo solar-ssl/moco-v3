@@ -11,7 +11,7 @@ import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
 import numpy as np
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Subset
 from torchvision import transforms
 from tqdm import tqdm
 from PIL import Image
@@ -127,6 +127,7 @@ def main():
     parser.add_argument('--lr', type=float, default=0.01)
     parser.add_argument('--save-dir', type=str, default='checkpoints_finetune')
     parser.add_argument('--crop-size', type=int, default=224, help='Training crop size')
+    parser.add_argument('--val-subset', type=int, default=50, help='Number of validation images to check during training (speed up)')
     args = parser.parse_args()
 
     config = Config()
@@ -170,7 +171,6 @@ def main():
     ])
     
     # Validation: No resize, full resolution!
-    # Only normalize image
     val_transform = transforms.Compose([
         transforms.ToTensor(),
         normalize,
@@ -186,8 +186,17 @@ def main():
                                           split='val')
 
     train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=4, drop_last=True)
-    # Batch size 1 for validation because images are 1024x1024 (full res)
-    val_loader = DataLoader(val_dataset, batch_size=1, shuffle=False, num_workers=4)
+    
+    # Create subset for intermediate validation
+    if args.val_subset > 0 and args.val_subset < len(val_dataset):
+        indices = list(range(args.val_subset))
+        val_subset_dataset = Subset(val_dataset, indices)
+    else:
+        val_subset_dataset = val_dataset
+
+    # Loaders for subset (fast) and full (final)
+    val_loader_fast = DataLoader(val_subset_dataset, batch_size=1, shuffle=False, num_workers=4)
+    val_loader_full = DataLoader(val_dataset, batch_size=1, shuffle=False, num_workers=4)
 
     # 4. Optimization
     optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=0.9, weight_decay=1e-4)
@@ -217,19 +226,22 @@ def main():
         
         scheduler.step()
 
-        # Validation Phase (Sliding Window)
+        # Validation Phase
+        # Use full set on last epoch, subset otherwise
+        is_last_epoch = (epoch == args.epochs - 1)
+        current_val_loader = val_loader_full if is_last_epoch else val_loader_fast
+        loader_desc = "Validating (Full)" if is_last_epoch else "Validating (Subset)"
+        
         model.eval()
         total_ious = []
         with torch.no_grad():
-            for images, masks in tqdm(val_loader, desc="Validating (Sliding Window)"):
-                # images: (1, 3, 1024, 1024), masks: (1, 1024, 1024)
-                img = images[0] # (3, H, W)
-                mask = masks[0].to(device) # (H, W)
+            for images, masks in tqdm(current_val_loader, desc=loader_desc):
+                img = images[0] 
+                mask = masks[0].to(device)
                 
                 # Run sliding window
                 pred = sliding_window_inference(model, img, num_classes=2, crop_size=args.crop_size, device=device)
                 
-                # Calculate metric on full resolution
                 iou = calculate_iou(pred, mask)
                 valid_ious = [x for x in iou if not np.isnan(x)]
                 if valid_ious:
@@ -238,6 +250,7 @@ def main():
         miou = np.mean(total_ious) if total_ious else 0
         print(f"Epoch {epoch+1}: mIoU = {miou:.4f}")
 
+        # Save best model (track performance on subset for checkpoints)
         if miou > best_miou:
             best_miou = miou
             torch.save(model.state_dict(), os.path.join(args.save_dir, 'best_unet.pth'))
