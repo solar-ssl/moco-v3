@@ -18,7 +18,7 @@ from PIL import Image
 
 from src.config import Config
 from src.models.backbones import get_backbone
-from src.models.unet import ResNetUNet
+from src.models.unet import get_segmentation_model
 from src.datasets.pv03_seg import PV03SegmentationDataset
 
 # --- Joint Transforms ---
@@ -155,7 +155,7 @@ def main():
                 new_state_dict[k.replace('base_model.', '')] = v
         backbone_model.load_state_dict(new_state_dict, strict=False)
     
-    model = ResNetUNet(backbone_model, num_classes=2).to(device)
+    model = get_segmentation_model(backbone_model, num_classes=2).to(device)
 
     # 3. Data Loading
     normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
