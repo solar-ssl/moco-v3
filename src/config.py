@@ -10,7 +10,7 @@ from typing import Tuple
 class Config:
     # Dataset settings
     dataset_path: str = "dataset/original"
-    image_size: int = 224
+    image_size: int = 512
     
     # Model settings
     backbone: str = "resnet50"  # Options: "resnet50", "vit_small", "vit_base"
@@ -18,7 +18,7 @@ class Config:
     mlp_dim: int = 4096
     
     # Training settings
-    batch_size: int = 64  # Total batch size (32 per GPU for 2 GPUs)
+    batch_size: int = 32  # Total batch size (32 per GPU for 2 GPUs)
     epochs: int = 100
     learning_rate: float = 0.015
     momentum: float = 0.99
