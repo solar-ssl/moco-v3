@@ -90,13 +90,18 @@ class ViTUNet(nn.Module):
         
         # Forward pass through ViT
         # 1. Patch Embedding
-        # Note: We manually replicate _process_input logic to ensure compatibility
-        x = self.backbone._process_input(x)
+        x = self.backbone.conv_proj(x)
+        x = x.flatten(2).transpose(1, 2)
         
-        # 2. Transformer Encoder
+        # 2. Add CLS Token
+        batch_class_token = self.backbone.class_token.expand(n, -1, -1)
+        x = torch.cat([batch_class_token, x], dim=1)
+        
+        # 3. Transformer Encoder
+        # Note: self.backbone.encoder adds the positional embedding internally
         x = self.backbone.encoder(x)
         
-        # 3. Reshape to Spatial
+        # 4. Reshape to Spatial
         # Remove CLS token
         x = x[:, 1:]
         # (N, L, D) -> (N, D, H/p, W/p)
