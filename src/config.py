@@ -13,7 +13,7 @@ class Config:
     image_size: int = 224
     
     # Model settings
-    backbone: str = "vit_small"  # Options: "resnet50", "vit_small", "vit_base"
+    backbone: str = "vit_base"  # Options: "resnet50", "vit_small", "vit_base"
     feature_dim: int = 256
     mlp_dim: int = 4096
     
