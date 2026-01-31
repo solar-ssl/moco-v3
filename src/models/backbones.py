@@ -6,7 +6,7 @@ Supports ResNet-50 and Vision Transformers.
 import torch.nn as nn
 from torchvision import models
 
-def get_backbone(name: str = "resnet50", pretrained: bool = False):
+def get_backbone(name: str = "resnet50", pretrained: bool = False, stop_grad_conv1: bool = False):
     """
     Returns the backbone model and its output dimension.
     """
@@ -23,13 +23,22 @@ def get_backbone(name: str = "resnet50", pretrained: bool = False):
             model = models.vit_b_16(weights=models.ViT_B_16_Weights.DEFAULT if pretrained else None)
             dim_in = model.heads.head.in_features
             model.heads = nn.Identity()
-            return model, dim_in
         elif name == "vit_base":
             model = models.vit_b_16(weights=models.ViT_B_16_Weights.DEFAULT if pretrained else None)
             dim_in = model.heads.head.in_features
             model.heads = nn.Identity()
-            return model, dim_in
         else:
             raise NotImplementedError(f"Backbone {name} not implemented")
+            
+        if stop_grad_conv1:
+            # Freezing the patch embedding layer (projection)
+            # In torchvision ViT, this is usually model.conv_proj
+            if hasattr(model, 'conv_proj'):
+                 for param in model.conv_proj.parameters():
+                    param.requires_grad = False
+            # Some versions might cache it differently, check structure
+            # But standard torchvision ViT has conv_proj.
+            
+        return model, dim_in
     else:
         raise ValueError(f"Unknown backbone: {name}")

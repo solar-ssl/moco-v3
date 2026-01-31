@@ -17,20 +17,27 @@ class Config:
     feature_dim: int = 256
     mlp_dim: int = 4096
     
+    # Queue settings (Hybrid MoCo v3/v2)
+    use_queue: bool = True
+    queue_size: int = 65536
+    
     # Training settings
     batch_size: int = 32  # Total batch size (32 per GPU for 2 GPUs)
     epochs: int = 100
-    learning_rate: float = 0.015
+    learning_rate: float = 1.5e-4  # AdamW base LR
+    warmup_epochs: int = 40
     momentum: float = 0.99
     temperature: float = 0.2
-    weight_decay: float = 1e-4
+    weight_decay: float = 0.05
     
     # Optimizer settings
-    optimizer: str = "sgd"  # Options: "sgd", "adamw"
+    optimizer: str = "adamw"  # Options: "sgd", "adamw"
     
     # Hardware settings
     num_workers: int = 8
     seed: int = 42
+    use_amp: bool = True  # Mixed Precision
+    use_grad_checkpointing: bool = True
     
     # Checkpoint settings
     checkpoint_dir: str = "checkpoints"

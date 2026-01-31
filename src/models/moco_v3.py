@@ -11,17 +11,21 @@ class MoCoV3(nn.Module):
     """
     MoCo v3: momentum contrast with prediction head and momentum update.
     """
-    def __init__(self, base_encoder, dim=256, mlp_dim=4096, T=0.2, m=0.99):
+    def __init__(self, base_encoder, dim=256, mlp_dim=4096, T=0.2, m=0.99, use_queue=False, queue_size=65536):
         """
         dim: feature dimension (default: 256)
         mlp_dim: hidden dimension in MLPs (default: 4096)
         T: softmax temperature (default: 0.2)
         m: moco momentum of updating key encoder (default: 0.99)
+        use_queue: whether to use a memory queue (hybrid MoCo v2/v3) (default: False)
+        queue_size: size of memory queue (default: 65536)
         """
         super(MoCoV3, self).__init__()
 
         self.T = T
         self.m = m
+        self.use_queue = use_queue
+        self.queue_size = queue_size
 
         # Create the encoders
         # base_encoder returns (model, dim_in)
@@ -61,6 +65,12 @@ class MoCoV3(nn.Module):
             param_k.data.copy_(param_q.data)
         for param_q, param_k in zip(self.projector_q.parameters(), self.projector_k.parameters()):
             param_k.data.copy_(param_q.data)
+            
+        # create the queue
+        if self.use_queue:
+            self.register_buffer("queue", torch.randn(dim, queue_size))
+            self.queue = nn.functional.normalize(self.queue, dim=0)
+            self.register_buffer("queue_ptr", torch.zeros(1, dtype=torch.long))
 
     @torch.no_grad()
     def _update_momentum_encoder(self, m):
@@ -69,16 +79,50 @@ class MoCoV3(nn.Module):
             param_k.data = param_k.data * m + param_q.data * (1. - m)
         for param_q, param_k in zip(self.projector_q.parameters(), self.projector_k.parameters()):
             param_k.data = param_k.data * m + param_q.data * (1. - m)
+            
+    @torch.no_grad()
+    def _dequeue_and_enqueue(self, keys):
+        # gather keys before updating queue
+        keys = concat_all_gather(keys)
+
+        batch_size = keys.shape[0]
+
+        ptr = int(self.queue_ptr)
+        assert self.queue_size % batch_size == 0, f"Queue size {self.queue_size} not consistent with gathered batch size {batch_size}"
+
+        # replace the keys at ptr (dequeue and enqueue)
+        self.queue[:, ptr:ptr + batch_size] = keys.T
+        ptr = (ptr + batch_size) % self.queue_size  # move pointer
+
+        self.queue_ptr[0] = ptr
 
     def contrastive_loss(self, q, k):
         # Normalize
         q = nn.functional.normalize(q, dim=1)
         k = nn.functional.normalize(k, dim=1)
         
-        # Einstein sum is more efficient for multi-gpu
-        logits = torch.einsum('nc,mc->nm', [q, k]) / self.T
-        labels = torch.arange(logits.shape[0], dtype=torch.long).to(logits.device)
-        return nn.CrossEntropyLoss()(logits, labels)
+        if self.use_queue:
+            # compute logits
+            # Einstein sum is more efficient
+            # positive logits: Nx1
+            l_pos = torch.einsum('nc,nc->n', [q, k]).unsqueeze(-1)
+            # negative logits: NxK
+            l_neg = torch.einsum('nc,ck->nk', [q, self.queue.clone().detach()])
+
+            # logits: Nx(1+K)
+            logits = torch.cat([l_pos, l_neg], dim=1)
+
+            # apply temperature
+            logits /= self.T
+
+            # labels: positive key indicators
+            labels = torch.zeros(logits.shape[0], dtype=torch.long).to(logits.device)
+            return nn.CrossEntropyLoss()(logits, labels)
+        else:
+            # Einstein sum is more efficient for multi-gpu
+            logits = torch.einsum('nc,mc->nm', [q, k]) / self.T
+            labels = torch.arange(logits.shape[0], dtype=torch.long).to(logits.device)
+            return nn.CrossEntropyLoss()(logits, labels)
 
     def forward(self, x1, x2, m):
         """
@@ -102,5 +146,69 @@ class MoCoV3(nn.Module):
             k2 = self.projector_k(self.base_model_k(x2))
 
         # Loss is symmetric
-        loss = self.contrastive_loss(q1, k2) + self.contrastive_loss(q2, k1)
+        if self.use_queue:
+            loss1 = self.contrastive_loss(q1, k2)
+            loss2 = self.contrastive_loss(q2, k1)
+            loss = loss1 + loss2
+            # update queue
+            self._dequeue_and_enqueue(torch.cat([k1, k2], dim=0)) # simplified: queue both or just one? MoCo v2 queues k2.
+            # actually MoCo v2 queues after processing.
+            # To be symmetric, usually we dequeue/enqueue once.
+            # Let's dequeue/enqueue k2 for the first pass and k1... no that's complex
+            # Standard Practice for Symmetric MoCo:
+            # It's tricky with queue. Usually queue is updated once per step with keys.
+            # If we do symmetric, we should probably update queue with k1 AND k2? or just k2?
+            # Simpler to just update with concatenated keys or just one.
+            # Let's just update with k2 to be consistent with MoCo v2 structure where x2 is the key view.
+            # Wait, symmetric loss means x1->k2 and x2->k1.
+            # Let's simple queue k2.
+            pass # _dequeue is called separately ? No, inside forward
+            
+        else:
+            loss = self.contrastive_loss(q1, k2) + self.contrastive_loss(q2, k1)
+            
         return loss
+
+    def forward_with_queue_update(self, x1, x2, m):
+        # Update momentum encoder
+        self._update_momentum_encoder(m)
+
+        # Compute query features
+        q1 = self.predictor(self.projector_q(self.base_model(x1)))
+        q2 = self.predictor(self.projector_q(self.base_model(x2)))
+
+        # Compute key features
+        with torch.no_grad():
+            k1 = self.projector_k(self.base_model_k(x1))
+            k2 = self.projector_k(self.base_model_k(x2))
+
+        # Loss
+        # We need to compute loss before updating queue if we want the current keys to be positives
+        loss1 = self.contrastive_loss(q1, k2)
+        loss2 = self.contrastive_loss(q2, k1)
+        
+        # dequeue and enqueue
+        if self.use_queue:
+             # Update queue with BOTH keys? or just averaged? 
+             # MoCo v2 uses one update per step. 
+             # Let's concatenate them to fill queue faster and have more diversity
+             self._dequeue_and_enqueue(torch.cat([k1, k2], dim=0))
+
+        return loss1 + loss2
+
+# utils
+@torch.no_grad()
+def concat_all_gather(tensor):
+    """
+    Performs all_gather operation on the provided tensors.
+    *** Warning ***: torch.distributed.all_gather has no gradient.
+    """
+    if not torch.distributed.is_available() or not torch.distributed.is_initialized():
+        return tensor
+
+    tensors_gather = [torch.ones_like(tensor)
+        for _ in range(torch.distributed.get_world_size())]
+    torch.distributed.all_gather(tensors_gather, tensor, async_op=False)
+
+    output = torch.cat(tensors_gather, dim=0)
+    return output
