@@ -48,4 +48,4 @@ class Config:
         """Returns a concise tag for the current experiment configuration."""
         # Abbreviate backbone
         bb = "r50" if "resnet50" in self.backbone else self.backbone.replace("vit_", "v")
-        return f"{bb}_bs{self.batch_size}_lr{self.learning_rate}_ep{self.epochs}"
+        return f"{bb}_bs{self.batch_size}_lr{self.learning_rate}_ep{self.epochs}_hybrid"
