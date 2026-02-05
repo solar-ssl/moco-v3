@@ -32,6 +32,12 @@ class Solarize:
     def __call__(self, x):
         return ImageOps.solarize(x)
 
+class DiscreteRotation:
+    """Discrete 90-degree rotations for satellite imagery with orientation invariance."""
+    def __call__(self, x):
+        angle = random.choice([0, 90, 180, 270])
+        return transforms.functional.rotate(x, angle)
+
 class GaussianNoise:
     """Gaussian noise augmentation for satellite imagery."""
     def __init__(self, mean=0., std=0.1):
@@ -58,9 +64,9 @@ class GaussianNoise:
 
 def get_moco_v3_augmentations(image_size: int = 224):
     """
-    Returns the MoCo v3 augmentation pipeline.
+    Returns the MoCo v3 augmentation pipeline adapted for satellite imagery.
     Standard pipeline includes: ResizedCrop, ColorJitter, Grayscale, GaussianBlur, Solarize.
-    Enhanced with RandomRotation and GaussianNoise for satellite imagery.
+    Enhanced with discrete 90° rotations and pre-normalization noise for satellites.
     """
     augmentation = [
         transforms.RandomResizedCrop(image_size, scale=(0.2, 1.0)),
@@ -71,9 +77,10 @@ def get_moco_v3_augmentations(image_size: int = 224):
         transforms.RandomApply([GaussianBlur([0.1, 2.0])], p=1.0),
         transforms.RandomApply([Solarize()], p=0.2),
         transforms.RandomHorizontalFlip(),
-        transforms.RandomRotation(90), # 90 degree rotations for man-made structures
+        transforms.RandomVerticalFlip(),  # Valid for satellite imagery
+        DiscreteRotation(),  # Discrete 0/90/180/270° rotations (not continuous)
         transforms.ToTensor(),
+        transforms.RandomApply([GaussianNoise(std=0.05)], p=0.5),  # Noise BEFORE normalization (sensor noise in pixel space)
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-        transforms.RandomApply([GaussianNoise(std=0.05)], p=0.5) # Apply noise after normalization
     ]
     return transforms.Compose(augmentation)
