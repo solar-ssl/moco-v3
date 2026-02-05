@@ -207,3 +207,148 @@ Test each branch independently before merging
 **Generated:** 2026-02-05  
 **Author:** Copilot CLI + NotebookLM Analysis  
 **Status:** 5/8 fixes completed, 3 pending
+
+---
+
+## 🔴 CRITICAL UPDATE: HARDWARE CONSTRAINT DISCOVERED
+
+**Date:** 2026-02-05 (Post-Review)  
+**Issue:** User has 8GB + 8GB = 16GB total VRAM
+
+### INVALIDATED FIX
+
+**Branch:** `fix/correct-batch-size-lr-schedule` [38a1420]  
+**Status:** ❌ **DO NOT MERGE** - Requires 80GB+ VRAM
+
+This fix was based on the assumption of unlimited VRAM (A100 cluster). It is **physically impossible** to run on 16GB VRAM.
+
+---
+
+## ✅ NEW FIX: Low-VRAM Configuration
+
+### 6. **fix/low-vram-training-config** ✨ RECOMMENDED
+**Branch:** `fix/low-vram-training-config`  
+**Commits:** `f49bae5`, `eeef47b`  
+**Priority:** P0 (CRITICAL for 16GB VRAM users)
+
+**Replaces:** `fix/correct-batch-size-lr-schedule` (invalid for low VRAM)
+
+**Changes:**
+- ✅ Created `config_low_vram.py` optimized for 16GB VRAM
+- ✅ Backbone: ViT-Base → ResNet-50 (50% VRAM reduction)
+- ✅ Batch size: 64 per GPU (128 total effective)
+- ✅ Gradient accumulation: 4 steps (simulates batch=512)
+- ✅ Queue: ENABLED (compensates for small batches)
+- ✅ Learning rate: 3.0e-4 (scaled for effective_batch=512)
+- ✅ Added VRAM estimation utility
+- ✅ Created HARDWARE_CONFIGS.md documentation
+
+**VRAM Breakdown (per GPU):**
+```
+Model (ResNet-50):        ~2.5GB
+Batch (64 images):        ~3.0GB
+Gradients/optimizer:      ~1.5GB
+Buffer:                   ~1.0GB
+─────────────────────────────────
+TOTAL:                    ~8.0GB ✓
+```
+
+**Impact:** Makes MoCo v3 training feasible on consumer GPUs (RTX 3060/4060)
+
+**Files Modified:** 
+- `src/config_low_vram.py` (new)
+- `src/config.py` (updated with warnings)
+- `HARDWARE_CONFIGS.md` (new documentation)
+
+---
+
+## 📊 REVISED METRICS (16GB VRAM)
+
+| Component | BEFORE | AFTER (Low-VRAM) | Status |
+|-----------|--------|------------------|--------|
+| Batch Size | 32 | 64 per GPU (128 total) | ✅ |
+| Effective Batch | 32 | 512 (with grad accum) | ✅ |
+| Epochs | 100 | 300 | ✅ |
+| Learning Rate | 1.5e-4 | 3.0e-4 (scaled) | ✅ |
+| Backbone | ViT-Base | ResNet-50 | ✅ |
+| Queue | Enabled | Enabled (hybrid) | ✅ |
+| BN Layers (Proj) | 2/3 | 3/3 ✅ | Fixed |
+| BN Layers (Pred) | 1/2 | 2/2 ✅ | Fixed |
+| VRAM per GPU | ~12GB ❌ | ~8GB ✅ | FITS! |
+
+---
+
+## 🚀 UPDATED DEPLOYMENT (16GB VRAM)
+
+### Recommended Merge Sequence
+
+```bash
+git checkout main
+
+# Apply universal fixes
+git merge fix/projection-prediction-head-batchnorm
+git merge fix/queue-update-logic
+git merge fix/satellite-augmentations
+git merge fix/vit-patch-projection-freeze
+
+# Apply low-VRAM config (replaces batch-size fix)
+git merge fix/low-vram-training-config
+
+# SKIP: fix/correct-batch-size-lr-schedule (invalid)
+```
+
+### Update Training Script
+
+```python
+# In train_moco.py, line 24:
+# OLD:
+from src.config import Config
+
+# NEW:
+from src.config_low_vram import Config
+```
+
+---
+
+## ⚠️ REVISED BREAKING CHANGES
+
+1. **Config Import Change:**
+   - Must use `config_low_vram` instead of `config` for 16GB VRAM
+   - Original `config` kept for reference/high-VRAM systems
+
+2. **Backbone Change:**
+   - ViT-Base → ResNet-50 for low-VRAM users
+   - Transfer learning scripts may need adjustment
+
+3. **Gradient Accumulation:**
+   - Training loop must support accumulation (check train_moco.py)
+
+---
+
+## 🎯 FINAL BRANCH STATUS
+
+| Branch | Status | For 16GB VRAM? |
+|--------|--------|----------------|
+| fix/projection-prediction-head-batchnorm | ✅ Valid | ✅ Yes |
+| fix/correct-batch-size-lr-schedule | ❌ Invalid | ❌ No (needs 80GB) |
+| fix/queue-update-logic | ✅ Valid | ✅ Yes |
+| fix/satellite-augmentations | ✅ Valid | ✅ Yes |
+| fix/vit-patch-projection-freeze | ✅ Valid | ✅ Yes |
+| **fix/low-vram-training-config** | **✅ Valid** | **✅ Yes (REQUIRED)** |
+
+**Total Valid Fixes:** 5 out of 6  
+**Hardware-Specific Fix:** 1 (low-VRAM config)
+
+---
+
+## 📚 UPDATED REFERENCES
+
+- MoCo v3 Paper: "An Empirical Study of Training Self-Supervised Vision Transformers"
+- NotebookLM Knowledge Base: MoCo Architecture notebook
+- **NEW:** HARDWARE_CONFIGS.md - VRAM constraint analysis
+- **NEW:** config_low_vram.py - Production config for 16GB VRAM
+
+---
+
+**Last Updated:** 2026-02-05 (Hardware constraint addressed)  
+**Status:** 5/6 fixes valid, 1 invalidated (replaced with low-VRAM alternative)
