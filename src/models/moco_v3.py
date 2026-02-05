@@ -145,56 +145,15 @@ class MoCoV3(nn.Module):
             k1 = self.projector_k(self.base_model_k(x1))
             k2 = self.projector_k(self.base_model_k(x2))
 
-        # Loss is symmetric
+        # Symmetric contrastive loss
+        loss = self.contrastive_loss(q1, k2) + self.contrastive_loss(q2, k1)
+        
+        # Update queue with k2 only (standard MoCo practice for symmetric loss)
+        # Queue updated ONCE per iteration to maintain proper negative sampling
         if self.use_queue:
-            loss1 = self.contrastive_loss(q1, k2)
-            loss2 = self.contrastive_loss(q2, k1)
-            loss = loss1 + loss2
-            # update queue
-            self._dequeue_and_enqueue(torch.cat([k1, k2], dim=0)) # simplified: queue both or just one? MoCo v2 queues k2.
-            # actually MoCo v2 queues after processing.
-            # To be symmetric, usually we dequeue/enqueue once.
-            # Let's dequeue/enqueue k2 for the first pass and k1... no that's complex
-            # Standard Practice for Symmetric MoCo:
-            # It's tricky with queue. Usually queue is updated once per step with keys.
-            # If we do symmetric, we should probably update queue with k1 AND k2? or just k2?
-            # Simpler to just update with concatenated keys or just one.
-            # Let's just update with k2 to be consistent with MoCo v2 structure where x2 is the key view.
-            # Wait, symmetric loss means x1->k2 and x2->k1.
-            # Let's simple queue k2.
-            pass # _dequeue is called separately ? No, inside forward
-            
-        else:
-            loss = self.contrastive_loss(q1, k2) + self.contrastive_loss(q2, k1)
+            self._dequeue_and_enqueue(k2)
             
         return loss
-
-    def forward_with_queue_update(self, x1, x2, m):
-        # Update momentum encoder
-        self._update_momentum_encoder(m)
-
-        # Compute query features
-        q1 = self.predictor(self.projector_q(self.base_model(x1)))
-        q2 = self.predictor(self.projector_q(self.base_model(x2)))
-
-        # Compute key features
-        with torch.no_grad():
-            k1 = self.projector_k(self.base_model_k(x1))
-            k2 = self.projector_k(self.base_model_k(x2))
-
-        # Loss
-        # We need to compute loss before updating queue if we want the current keys to be positives
-        loss1 = self.contrastive_loss(q1, k2)
-        loss2 = self.contrastive_loss(q2, k1)
-        
-        # dequeue and enqueue
-        if self.use_queue:
-             # Update queue with BOTH keys? or just averaged? 
-             # MoCo v2 uses one update per step. 
-             # Let's concatenate them to fill queue faster and have more diversity
-             self._dequeue_and_enqueue(torch.cat([k1, k2], dim=0))
-
-        return loss1 + loss2
 
 # utils
 @torch.no_grad()
