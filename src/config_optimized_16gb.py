@@ -50,10 +50,11 @@ class Config:
     
     # Learning rate scaling: base_lr * (effective_batch / 256)
     # Effective batch with accumulation: 96 * 2 GPUs * 4 steps = 768
-    # lr = 1.5e-4 * (768 / 256) = 4.5e-4
-    learning_rate: float = 4.5e-4  # Scaled for effective_batch=768
-    base_lr: float = 1.5e-4  # Reference LR at batch=256
-    warmup_epochs: int = 60  # 10% of total (600 epochs)
+    # lr = 1.5e-3 * (768 / 256) = 4.5e-3
+    # NOTE: base_lr MUST be 1.5e-3 (paper value), NOT 1.5e-4!
+    learning_rate: float = 4.5e-3  # Scaled for effective_batch=768
+    base_lr: float = 1.5e-3  # Reference LR at batch=256 (PAPER VALUE!)
+    warmup_epochs: int = 40  # Paper recommendation
     momentum: float = 0.99
     temperature: float = 0.2
     weight_decay: float = 0.05

@@ -149,8 +149,9 @@ class MoCoV3(nn.Module):
             k1 = self.projector_k(self.base_model_k(x1))
             k2 = self.projector_k(self.base_model_k(x2))
 
-        # Symmetric contrastive loss
-        loss = self.contrastive_loss(q1, k2) + self.contrastive_loss(q2, k1)
+        # Symmetric contrastive loss (MUST be averaged, not summed!)
+        # MoCo v3 computes loss for both directions and averages them
+        loss = 0.5 * (self.contrastive_loss(q1, k2) + self.contrastive_loss(q2, k1))
         
         # Update queue with k2 only (standard MoCo practice for symmetric loss)
         # Queue updated ONCE per iteration to maintain proper negative sampling
