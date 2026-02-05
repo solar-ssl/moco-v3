@@ -32,6 +32,7 @@ class MoCoV3(nn.Module):
         self.base_model, dim_in = base_encoder()
         
         # Projector for query encoder (3-layer MLP)
+        # Per MoCo v3 spec: BN applied to ALL layers including output
         self.projector_q = nn.Sequential(
             nn.Linear(dim_in, mlp_dim, bias=False),
             nn.BatchNorm1d(mlp_dim),
@@ -39,7 +40,8 @@ class MoCoV3(nn.Module):
             nn.Linear(mlp_dim, mlp_dim, bias=False),
             nn.BatchNorm1d(mlp_dim),
             nn.ReLU(inplace=True),
-            nn.Linear(mlp_dim, dim)
+            nn.Linear(mlp_dim, dim, bias=False),
+            nn.BatchNorm1d(dim)  # BN on output layer (critical for MoCo v3)
         )
 
         # Build momentum encoder
@@ -47,11 +49,13 @@ class MoCoV3(nn.Module):
         self.projector_k = copy.deepcopy(self.projector_q)
 
         # Predictor (2-layer MLP)
+        # Per MoCo v3 spec: BN applied to ALL layers including output
         self.predictor = nn.Sequential(
             nn.Linear(dim, mlp_dim, bias=False),
             nn.BatchNorm1d(mlp_dim),
             nn.ReLU(inplace=True),
-            nn.Linear(mlp_dim, dim)
+            nn.Linear(mlp_dim, dim, bias=False),
+            nn.BatchNorm1d(dim)  # BN on output layer (critical for MoCo v3)
         )
 
         # Deactivate gradient for momentum encoder
