@@ -23,6 +23,7 @@ from src.config_optimized_16gb import Config
 
 **Benefits:**
 - ✅ Batch size: 64 → 96 (+50%)
+- ✅ Queue size: 65,536 → 76,800 (divisible by batch!)
 - ✅ Effective batch: 512 → 768 (+50%)
 - ✅ Epochs: 300 → 600 (better for small datasets)
 - ✅ VRAM usage: 4.6 GB → 6.9 GB (86% utilization)
@@ -30,6 +31,8 @@ from src.config_optimized_16gb import Config
 - ✅ Total training time: 15 hours (was 10 hrs but 2× epochs)
 
 **Safe?** YES! Estimated 6.9 GB with 1.1 GB safety margin.
+
+**Queue compatibility:** 76,800 / 96 = 800 batches (perfect division) ✅
 
 ---
 
@@ -40,6 +43,7 @@ If you want to prioritize safety or maximize effective batch:
 **Modify `config_low_vram.py`:**
 ```python
 batch_size: int = 80  # Instead of 64
+queue_size: int = 64000  # MUST change for compatibility! (80 × 800)
 # Keep grad_accum=4
 # Effective batch = 80 * 2 * 4 = 640
 # VRAM usage: ~5.75 GB
@@ -50,21 +54,25 @@ batch_size: int = 80  # Instead of 64
 - ✅ Effective batch: 512 → 640
 - ✅ Still very safe (~2.25 GB margin)
 
+**⚠️ IMPORTANT:** Queue size MUST be divisible by batch size! 64,000 / 80 = 800 ✅
+
 ---
 
 ### Option 3: Aggressive (If you want to push limits)
 
 **Test incrementally:**
 ```python
-batch_size: int = 112  # Risky but might work
-# Estimated VRAM: ~8.0 GB (no margin!)
-# Effective batch = 112 * 2 * 4 = 896
+batch_size: int = 128  # Risky - may OOM!
+queue_size: int = 65536  # Keeps original queue (128 is power of 2)
+# Estimated VRAM: ~9.2 GB (LIKELY TOO HIGH!)
+# Effective batch = 128 * 2 * 4 = 1024
 ```
 
 ⚠️ **Only try this if:**
 - You can monitor VRAM usage in real-time
 - You're okay with potential OOM crashes
 - You want maximum batch size for experiments
+- **Note:** batch=128 is divisible into 65536, but VRAM will likely exceed 8GB!
 
 ---
 
@@ -111,12 +119,14 @@ Possible reasons your earlier training used full 8GB:
 
 ## Comparison Table
 
-| Config | Batch | Eff. Batch | VRAM | Util. | Epochs | Time | Best For |
-|--------|-------|------------|------|-------|--------|------|----------|
-| `config_low_vram.py` (old) | 64 | 512 | 4.6 GB | 58% | 300 | 10h | Conservative |
-| `config_optimized_16gb.py` ⭐ | 96 | 768 | 6.9 GB | 86% | 600 | 15h | **2000 images** |
-| Manual batch=80 | 80 | 640 | 5.8 GB | 72% | 300 | 8h | Safe upgrade |
-| Aggressive batch=112 | 112 | 896 | 8.0 GB | 100% | 300 | 7h | Risky/testing |
+| Config | Batch | Queue | Eff. Batch | VRAM | Util. | Epochs | Time | Best For | Compatible |
+|--------|-------|-------|------------|------|-------|--------|------|----------|------------|
+| `config_low_vram.py` (old) | 64 | 65,536 | 512 | 4.6 GB | 58% | 300 | 10h | Conservative | ✅ |
+| `config_optimized_16gb.py` ⭐ | 96 | 76,800 | 768 | 6.9 GB | 86% | 600 | 15h | **2000 images** | ✅ |
+| Manual batch=80 | 80 | 64,000 | 640 | 5.8 GB | 72% | 300 | 8h | Safe upgrade | ✅ |
+| Aggressive batch=128 | 128 | 65,536 | 1024 | 9.2 GB | 115% | 300 | 7h | Won't fit! | ✅ (but OOM) |
+
+**Note:** "Compatible" means `queue_size % batch_size == 0`. All configs shown have compatible queue/batch settings.
 
 ---
 
@@ -216,3 +226,61 @@ Since you're early in training (only seeing the issue now), **start fresh with o
 - More efficient use of your hardware
 
 Start using what you have! 🚀
+
+---
+
+## ⚠️ CRITICAL: Queue/Batch Compatibility
+
+### Why Queue Size Matters
+
+MoCo uses a **queue** to store negative samples. The queue is updated by **replacing the oldest batch** with the current batch. This requires:
+
+```
+queue_size % batch_size == 0
+```
+
+**If not divisible:**
+- Queue pointer arithmetic breaks
+- Index out of bounds errors
+- Training crashes or corrupts queue
+
+### Valid Configurations
+
+| Batch Size | Queue Size | Divisible? | Queue Batches |
+|------------|------------|------------|---------------|
+| 64 | 65,536 | ✅ YES | 1,024 |
+| 96 | 76,800 | ✅ YES | 800 |
+| 80 | 64,000 | ✅ YES | 800 |
+| 128 | 65,536 | ✅ YES | 512 |
+| **96** | **65,536** | ❌ **NO** | **682.67 (broken!)** |
+
+### How to Fix Incompatible Configs
+
+If you change `batch_size`, you **MUST** update `queue_size`:
+
+**Method 1: Calculate new queue_size**
+```python
+batch_size = 96
+target_batches = 800  # How many batches you want in queue
+queue_size = batch_size * target_batches  # 96 × 800 = 76,800
+```
+
+**Method 2: Use power-of-2 batch sizes**
+Powers of 2 (32, 64, 128, 256) are always divisible into 65,536:
+```python
+batch_size = 64  # or 128
+queue_size = 65536  # No change needed
+```
+
+### Checking Your Config
+
+```python
+from src.config_optimized_16gb import Config
+c = Config()
+
+# Must be True!
+assert c.queue_size % c.batch_size == 0, "Incompatible queue/batch size!"
+print(f"✅ Queue holds {c.queue_size // c.batch_size} batches")
+```
+
+---

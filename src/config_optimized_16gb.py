@@ -11,11 +11,16 @@ VRAM Breakdown (per GPU):
 - Buffer: ~0.9GB
 Total: ~6.9GB per GPU ✓ Safe margin!
 
+IMPORTANT: Queue size (76,800) is divisible by batch size (96) to ensure
+proper queue indexing: 76,800 / 96 = 800 batches in queue.
+
 Improvements over config_low_vram.py:
 - Batch: 64 → 96 (+50% more images per batch)
+- Queue: 65,536 → 76,800 (divisible by batch size!)
 - VRAM usage: 4.6GB → 6.9GB (using 86% instead of 58%)
 - Training speed: ~35% faster per epoch
 - Effective batch: 512 → 768 (with grad_accum=4)
+- Queue contains: 76,800 / 96 = 800 batches of negatives
 """
 
 from dataclasses import dataclass
@@ -33,8 +38,10 @@ class Config:
     
     # Queue settings - CRITICAL for small datasets
     # With 2000 images, queue provides essential negatives
+    # IMPORTANT: queue_size MUST be divisible by batch_size for proper indexing!
+    # 76800 = 96 × 800 (ensures clean division)
     use_queue: bool = True
-    queue_size: int = 65536
+    queue_size: int = 76800  # Changed from 65536 to be divisible by batch=96
     
     # Training settings - OPTIMIZED for measured VRAM
     # Per-GPU batch: 96 → Total immediate: 192 across 2 GPUs
