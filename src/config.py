@@ -1,6 +1,15 @@
 """
 Configuration file for MoCo v3 pretraining.
 Contains hyperparameters, dataset paths, and training settings.
+
+⚠️ HARDWARE NOTE:
+This is the ORIGINAL config. For 16GB VRAM (8+8GB), use config_low_vram.py instead!
+- Original: ViT-Base, batch=32 → Needs ~12-15GB per GPU (won't fit)
+- Low VRAM: ResNet-50, batch=64 + grad accumulation → Fits in 8GB per GPU
+
+Switch config in train_moco.py:
+  from src.config import Config          # Original (high VRAM)
+  from src.config_low_vram import Config  # Low VRAM (16GB total)
 """
 
 from dataclasses import dataclass
@@ -22,9 +31,10 @@ class Config:
     queue_size: int = 65536
     
     # Training settings
-    batch_size: int = 32  # Total batch size (32 per GPU for 2 GPUs)
-    epochs: int = 100
-    learning_rate: float = 1.5e-4  # AdamW base LR
+    # ⚠️ WARNING: batch_size=32 with ViT-Base needs ~15GB VRAM per GPU
+    batch_size: int = 32  # Total batch size (too small for pure MoCo v3)
+    epochs: int = 100  # Too short for ViT (needs 300)
+    learning_rate: float = 1.5e-4  # AdamW base LR (for batch=256 reference)
     warmup_epochs: int = 40
     momentum: float = 0.99
     temperature: float = 0.2
