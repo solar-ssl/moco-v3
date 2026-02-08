@@ -106,6 +106,8 @@ class MoCoV3(nn.Module):
         k = nn.functional.normalize(k, dim=1)
         
         if use_queue:
+            # Positive logits: dot product of query and its corresponding key (Nx1)
+            l_pos = torch.einsum('nc,nc->n', [q, k]).unsqueeze(-1)
             # Negative logits from queue (NxK)
             # Use detach() to ensure no gradients flow back through the queue
             l_neg = torch.einsum('nc,ck->nk', [q, self.queue.clone().detach()])
