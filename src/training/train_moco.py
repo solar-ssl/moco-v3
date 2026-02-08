@@ -21,7 +21,7 @@ import torch.multiprocessing as mp
 import torch.utils.data
 import torch.utils.data.distributed
 
-from src.config import Config
+from src.config_low_vram import Config
 from src.datasets.pv03_ssl import PV03SSLDataset
 from src.models.moco_v3 import MoCoV3
 from src.models.backbones import get_backbone
@@ -47,6 +47,9 @@ def get_args():
 def main():
     args = get_args()
     config = Config()
+    
+    if hasattr(config, 'print_vram_estimate'):
+        config.print_vram_estimate()
 
     if config.seed is not None:
         random.seed(config.seed)
@@ -82,14 +85,16 @@ def main_worker(gpu, ngpus_per_node, args, config):
     # Create model
     print(f"=> creating model with {config.backbone} backbone")
     def backbone_fn():
-        return get_backbone(config.backbone)
+        # MoCo v3 trick: freeze patch projection
+        return get_backbone(config.backbone, stop_grad_conv1=True)
 
     model = MoCoV3(
         backbone_fn,
         dim=config.feature_dim,
         mlp_dim=config.mlp_dim,
         T=config.temperature,
-        m=config.momentum
+        m=config.momentum,
+        K=config.queue_size if hasattr(config, 'queue_size') else 65536
     )
 
     if args.multiprocessing_distributed:
@@ -117,9 +122,16 @@ def main_worker(gpu, ngpus_per_node, args, config):
         # All-reduce survey (comment out if not needed)
         model = model.cuda()
 
-    optimizer = torch.optim.SGD(model.parameters(), config.learning_rate,
-                                momentum=0.9,
-                                weight_decay=config.weight_decay)
+    if config.optimizer == "adamw":
+        optimizer = torch.optim.AdamW(model.parameters(), config.learning_rate,
+                                     weight_decay=config.weight_decay)
+    else:
+        optimizer = torch.optim.SGD(model.parameters(), config.learning_rate,
+                                    momentum=0.9,
+                                    weight_decay=config.weight_decay)
+
+    # Mixed precision scaler
+    scaler = torch.cuda.amp.GradScaler(enabled=config.use_amp)
 
     cudnn.benchmark = True
 
@@ -147,7 +159,7 @@ def main_worker(gpu, ngpus_per_node, args, config):
             train_sampler.set_epoch(epoch)
 
         # Train for one epoch
-        avg_loss = train(train_loader, model, optimizer, epoch, args, config)
+        avg_loss = train(train_loader, model, optimizer, scaler, epoch, args, config)
 
         # Check for best model (only on main process)
         if not args.multiprocessing_distributed or (args.multiprocessing_distributed
@@ -169,7 +181,7 @@ def main_worker(gpu, ngpus_per_node, args, config):
                 'loss': avg_loss,
             }, is_best=is_best, filename='last.pth', best_filename='best.pth', checkpoint_dir=exp_dir)
 
-def train(train_loader, model, optimizer, epoch, args, config):
+def train(train_loader, model, optimizer, scaler, epoch, args, config):
     batch_time = AverageMeter('Time', ':6.3f')
     data_time = AverageMeter('Data', ':6.3f')
     losses = AverageMeter('Loss', ':.4e')
@@ -185,6 +197,8 @@ def train(train_loader, model, optimizer, epoch, args, config):
         pbar = tqdm(total=len(train_loader), desc=f"Epoch [{epoch}]")
 
     end = time.time()
+    optimizer.zero_grad()
+    
     for i, (images) in enumerate(train_loader):
         # Measure data loading time
         data_time.update(time.time() - end)
@@ -197,16 +211,23 @@ def train(train_loader, model, optimizer, epoch, args, config):
             images[0] = images[0].cuda(args.gpu, non_blocking=True)
             images[1] = images[1].cuda(args.gpu, non_blocking=True)
 
-        # Compute output and loss
-        loss = model(images[0], images[1], cur_m)
+        # Compute output and loss with mixed precision
+        with torch.cuda.amp.autocast(enabled=config.use_amp):
+            loss = model(images[0], images[1], cur_m, use_queue=config.use_queue)
+            # Normalize loss for gradient accumulation
+            loss = loss / config.gradient_accumulation_steps
 
         # Record loss
-        losses.update(loss.item(), images[0].size(0))
+        losses.update(loss.item() * config.gradient_accumulation_steps, images[0].size(0))
 
-        # Compute gradient and do SGD step
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
+        # Compute gradient
+        scaler.scale(loss).backward()
+
+        # Update weights every 'accumulation_steps'
+        if (i + 1) % config.gradient_accumulation_steps == 0:
+            scaler.step(optimizer)
+            scaler.update()
+            optimizer.zero_grad()
 
         # Measure elapsed time
         batch_time.update(time.time() - end)
