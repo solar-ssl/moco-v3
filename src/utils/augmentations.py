@@ -5,7 +5,6 @@ Implements the Two-Crop augmentation pattern suitable for satellite imagery.
 
 import random
 from PIL import ImageFilter, ImageOps
-import torch
 from torchvision import transforms
 
 class TwoCropsTransform:

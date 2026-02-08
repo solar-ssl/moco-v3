@@ -82,16 +82,14 @@ def main_worker(gpu, ngpus_per_node, args, config):
     # Create model
     print(f"=> creating model with {config.backbone} backbone")
     def backbone_fn():
-        return get_backbone(config.backbone, stop_grad_conv1=True) # Always enable stability trick for ViT
+        return get_backbone(config.backbone)
 
     model = MoCoV3(
         backbone_fn,
         dim=config.feature_dim,
         mlp_dim=config.mlp_dim,
         T=config.temperature,
-        m=config.momentum,
-        use_queue=config.use_queue,
-        queue_size=config.queue_size
+        m=config.momentum
     )
 
     if args.multiprocessing_distributed:
@@ -119,13 +117,9 @@ def main_worker(gpu, ngpus_per_node, args, config):
         # All-reduce survey (comment out if not needed)
         model = model.cuda()
 
-    if config.optimizer == "adamw":
-        optimizer = torch.optim.AdamW(model.parameters(), config.learning_rate,
-                                     weight_decay=config.weight_decay)
-    else:
-        optimizer = torch.optim.SGD(model.parameters(), config.learning_rate,
-                                    momentum=0.9,
-                                    weight_decay=config.weight_decay)
+    optimizer = torch.optim.SGD(model.parameters(), config.learning_rate,
+                                momentum=0.9,
+                                weight_decay=config.weight_decay)
 
     cudnn.benchmark = True
 
@@ -145,9 +139,6 @@ def main_worker(gpu, ngpus_per_node, args, config):
     train_loader = torch.utils.data.DataLoader(
         train_dataset, batch_size=config.batch_size, shuffle=(train_sampler is None),
         num_workers=config.num_workers, pin_memory=True, sampler=train_sampler, drop_last=True)
-    
-    # Mixed precision scaler
-    scaler = torch.cuda.amp.GradScaler() if config.use_amp else None
 
     min_loss = float('inf')
 
@@ -156,7 +147,7 @@ def main_worker(gpu, ngpus_per_node, args, config):
             train_sampler.set_epoch(epoch)
 
         # Train for one epoch
-        avg_loss = train(train_loader, model, optimizer, scaler, epoch, args, config)
+        avg_loss = train(train_loader, model, optimizer, epoch, args, config)
 
         # Check for best model (only on main process)
         if not args.multiprocessing_distributed or (args.multiprocessing_distributed
@@ -178,7 +169,7 @@ def main_worker(gpu, ngpus_per_node, args, config):
                 'loss': avg_loss,
             }, is_best=is_best, filename='last.pth', best_filename='best.pth', checkpoint_dir=exp_dir)
 
-def train(train_loader, model, optimizer, scaler, epoch, args, config):
+def train(train_loader, model, optimizer, epoch, args, config):
     batch_time = AverageMeter('Time', ':6.3f')
     data_time = AverageMeter('Data', ':6.3f')
     losses = AverageMeter('Loss', ':.4e')
@@ -207,22 +198,15 @@ def train(train_loader, model, optimizer, scaler, epoch, args, config):
             images[1] = images[1].cuda(args.gpu, non_blocking=True)
 
         # Compute output and loss
-        optimizer.zero_grad()
-        
-        if config.use_amp and scaler is not None:
-            with torch.cuda.amp.autocast():
-                loss = model(images[0], images[1], cur_m)
-            
-            scaler.scale(loss).backward()
-            scaler.step(optimizer)
-            scaler.update()
-        else:
-            loss = model(images[0], images[1], cur_m)
-            loss.backward()
-            optimizer.step()
+        loss = model(images[0], images[1], cur_m)
 
         # Record loss
         losses.update(loss.item(), images[0].size(0))
+
+        # Compute gradient and do SGD step
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
 
         # Measure elapsed time
         batch_time.update(time.time() - end)
@@ -240,7 +224,7 @@ def train(train_loader, model, optimizer, scaler, epoch, args, config):
 def adjust_learning_rate(optimizer, epoch, i, iter_per_epoch, config):
     """Decay the learning rate with half-cycle cosine after warmup"""
     T = epoch * iter_per_epoch + i
-    warmup_iters = config.warmup_epochs * iter_per_epoch 
+    warmup_iters = 10 * iter_per_epoch  # 10 epochs of warmup
     T_max = config.epochs * iter_per_epoch
     
     if T < warmup_iters:

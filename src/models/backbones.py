@@ -36,10 +36,12 @@ def get_backbone(name: str = "resnet50", pretrained: bool = False, stop_grad_con
             model = models.vit_b_16(weights=models.ViT_B_16_Weights.DEFAULT if pretrained else None)
             dim_in = model.heads.head.in_features
             model.heads = nn.Identity()
+            return model, dim_in
         elif name == "vit_base":
             model = models.vit_b_16(weights=models.ViT_B_16_Weights.DEFAULT if pretrained else None)
             dim_in = model.heads.head.in_features
             model.heads = nn.Identity()
+            return model, dim_in
         else:
             raise NotImplementedError(f"Backbone {name} not implemented")
             

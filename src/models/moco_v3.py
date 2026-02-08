@@ -11,21 +11,17 @@ class MoCoV3(nn.Module):
     """
     MoCo v3: momentum contrast with prediction head and momentum update.
     """
-    def __init__(self, base_encoder, dim=256, mlp_dim=4096, T=0.2, m=0.99, use_queue=False, queue_size=65536):
+    def __init__(self, base_encoder, dim=256, mlp_dim=4096, T=0.2, m=0.99):
         """
         dim: feature dimension (default: 256)
         mlp_dim: hidden dimension in MLPs (default: 4096)
         T: softmax temperature (default: 0.2)
         m: moco momentum of updating key encoder (default: 0.99)
-        use_queue: whether to use a memory queue (hybrid MoCo v2/v3) (default: False)
-        queue_size: size of memory queue (default: 65536)
         """
         super(MoCoV3, self).__init__()
 
         self.T = T
         self.m = m
-        self.use_queue = use_queue
-        self.queue_size = queue_size
 
         # Create the encoders
         # base_encoder returns (model, dim_in)
@@ -69,12 +65,6 @@ class MoCoV3(nn.Module):
             param_k.data.copy_(param_q.data)
         for param_q, param_k in zip(self.projector_q.parameters(), self.projector_k.parameters()):
             param_k.data.copy_(param_q.data)
-            
-        # create the queue
-        if self.use_queue:
-            self.register_buffer("queue", torch.randn(dim, queue_size))
-            self.queue = nn.functional.normalize(self.queue, dim=0)
-            self.register_buffer("queue_ptr", torch.zeros(1, dtype=torch.long))
 
     @torch.no_grad()
     def _update_momentum_encoder(self, m):
@@ -83,50 +73,16 @@ class MoCoV3(nn.Module):
             param_k.data = param_k.data * m + param_q.data * (1. - m)
         for param_q, param_k in zip(self.projector_q.parameters(), self.projector_k.parameters()):
             param_k.data = param_k.data * m + param_q.data * (1. - m)
-            
-    @torch.no_grad()
-    def _dequeue_and_enqueue(self, keys):
-        # gather keys before updating queue
-        keys = concat_all_gather(keys)
-
-        batch_size = keys.shape[0]
-
-        ptr = int(self.queue_ptr)
-        assert self.queue_size % batch_size == 0, f"Queue size {self.queue_size} not consistent with gathered batch size {batch_size}"
-
-        # replace the keys at ptr (dequeue and enqueue)
-        self.queue[:, ptr:ptr + batch_size] = keys.T
-        ptr = (ptr + batch_size) % self.queue_size  # move pointer
-
-        self.queue_ptr[0] = ptr
 
     def contrastive_loss(self, q, k):
         # Normalize
         q = nn.functional.normalize(q, dim=1)
         k = nn.functional.normalize(k, dim=1)
         
-        if self.use_queue:
-            # compute logits
-            # Einstein sum is more efficient
-            # positive logits: Nx1
-            l_pos = torch.einsum('nc,nc->n', [q, k]).unsqueeze(-1)
-            # negative logits: NxK
-            l_neg = torch.einsum('nc,ck->nk', [q, self.queue.clone().detach()])
-
-            # logits: Nx(1+K)
-            logits = torch.cat([l_pos, l_neg], dim=1)
-
-            # apply temperature
-            logits /= self.T
-
-            # labels: positive key indicators
-            labels = torch.zeros(logits.shape[0], dtype=torch.long).to(logits.device)
-            return nn.CrossEntropyLoss()(logits, labels)
-        else:
-            # Einstein sum is more efficient for multi-gpu
-            logits = torch.einsum('nc,mc->nm', [q, k]) / self.T
-            labels = torch.arange(logits.shape[0], dtype=torch.long).to(logits.device)
-            return nn.CrossEntropyLoss()(logits, labels)
+        # Einstein sum is more efficient for multi-gpu
+        logits = torch.einsum('nc,mc->nm', [q, k]) / self.T
+        labels = torch.arange(logits.shape[0], dtype=torch.long).to(logits.device)
+        return nn.CrossEntropyLoss()(logits, labels)
 
     def forward(self, x1, x2, m):
         """
