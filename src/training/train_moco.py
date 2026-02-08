@@ -245,7 +245,8 @@ def train(train_loader, model, optimizer, scaler, epoch, args, config):
 def adjust_learning_rate(optimizer, epoch, i, iter_per_epoch, config):
     """Decay the learning rate with half-cycle cosine after warmup"""
     T = epoch * iter_per_epoch + i
-    warmup_iters = 10 * iter_per_epoch  # 10 epochs of warmup
+    warmup_epochs = config.warmup_epochs if hasattr(config, 'warmup_epochs') else 10
+    warmup_iters = warmup_epochs * iter_per_epoch
     T_max = config.epochs * iter_per_epoch
     
     if T < warmup_iters:
