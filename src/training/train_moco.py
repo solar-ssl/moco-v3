@@ -98,6 +98,9 @@ def main_worker(gpu, ngpus_per_node, args, config):
     )
 
     if args.multiprocessing_distributed:
+        # Enable SyncBN for multi-GPU stability
+        model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
+        
         # For multiprocessing distributed, DistributedDataParallel constructor
         # should always set the single device scope, otherwise,
         # DistributedDataParallel will use all available devices.

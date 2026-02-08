@@ -5,6 +5,7 @@ Features two encoders (query and momentum key), projection head, and prediction 
 
 import torch
 import torch.nn as nn
+import torch.distributed as dist
 import copy
 
 class MoCoV3(nn.Module):
@@ -82,8 +83,9 @@ class MoCoV3(nn.Module):
 
     @torch.no_grad()
     def _dequeue_and_enqueue(self, keys):
-        # gather keys before updating queue (if using DDP)
-        # keys = concat_all_gather(keys) # Handled externally or assuming single-node logic for now
+        # gather keys before updating queue
+        if dist.is_initialized():
+            keys = concat_all_gather(keys)
 
         batch_size = keys.shape[0]
         ptr = int(self.queue_ptr)
@@ -144,12 +146,29 @@ class MoCoV3(nn.Module):
         with torch.no_grad():
             k1 = self.projector_k(self.base_model_k(x1))
             k2 = self.projector_k(self.base_model_k(x2))
+            
+            # CRITICAL: Normalize keys before adding to queue
+            k1_norm = nn.functional.normalize(k1, dim=1)
+            k2_norm = nn.functional.normalize(k2, dim=1)
 
         # Loss is symmetric
+        # The contrastive_loss function will re-normalize q and k, which is safe
         loss = self.contrastive_loss(q1, k2, use_queue=use_queue) + \
                self.contrastive_loss(q2, k1, use_queue=use_queue)
         
         if use_queue:
-            self._dequeue_and_enqueue(torch.cat([k1, k2], dim=0))
+            self._dequeue_and_enqueue(torch.cat([k1_norm, k2_norm], dim=0))
 
         return loss
+
+@torch.no_grad()
+def concat_all_gather(tensor):
+    """
+    Performs all_gather operation on the provided tensors.
+    """
+    tensors_gather = [torch.ones_like(tensor)
+        for _ in range(torch.distributed.get_world_size())]
+    torch.distributed.all_gather(tensors_gather, tensor, async_op=False)
+
+    output = torch.cat(tensors_gather, dim=0)
+    return output
