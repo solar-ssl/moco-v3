@@ -105,19 +105,21 @@ class MoCoV3(nn.Module):
         q = nn.functional.normalize(q, dim=1)
         k = nn.functional.normalize(k, dim=1)
         
-        # Einstein sum for positive pairs (diagonal)
-        l_pos = torch.einsum('nc,nc->n', [q, k]).unsqueeze(-1)
-        
         if use_queue:
-            # Negative logits from queue
+            # Positive logits: dot product of query and its corresponding key (Nx1)
+            l_pos = torch.einsum('nc,nc->n', [q, k]).unsqueeze(-1)
+            # Negative logits from queue (NxK)
             l_neg = torch.einsum('nc,ck->nk', [q, self.queue.clone().detach()])
+            # Positive is at index 0
             logits = torch.cat([l_pos, l_neg], dim=1)
+            labels = torch.zeros(logits.shape[0], dtype=torch.long).to(logits.device)
         else:
             # Standard MoCo v3 (batch as negatives)
+            # NxN matrix where diagonal elements are positives
             logits = torch.einsum('nc,mc->nm', [q, k])
+            labels = torch.arange(logits.shape[0], dtype=torch.long).to(logits.device)
         
         logits /= self.T
-        labels = torch.zeros(logits.shape[0], dtype=torch.long).to(logits.device)
         return nn.CrossEntropyLoss()(logits, labels)
 
     def forward(self, x1, x2, m, use_queue=False):
