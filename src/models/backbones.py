@@ -6,7 +6,7 @@ Supports ResNet-50 and Vision Transformers.
 import torch.nn as nn
 from torchvision import models
 
-def get_backbone(name: str = "resnet50", pretrained: bool = False, stop_grad_conv1: bool = True):
+def get_backbone(name: str = "resnet50", pretrained: bool = False):
     """
     Returns the backbone model and its output dimension.
     
@@ -44,33 +44,5 @@ def get_backbone(name: str = "resnet50", pretrained: bool = False, stop_grad_con
             return model, dim_in
         else:
             raise NotImplementedError(f"Backbone {name} not implemented")
-            
-        if stop_grad_conv1:
-            # CRITICAL STABILITY TRICK: Freeze patch projection layer
-            # Per MoCo v3 paper: prevents gradient spikes in first layer
-            # Torchvision ViT patch projection is in model.conv_proj
-            
-            patch_proj_found = False
-            if hasattr(model, 'conv_proj'):
-                for param in model.conv_proj.parameters():
-                    param.requires_grad = False
-                patch_proj_found = True
-                print(f"✓ Froze ViT patch projection layer (conv_proj)")
-            
-            # Fallback: check encoder.conv_proj (alternative structure)
-            elif hasattr(model, 'encoder') and hasattr(model.encoder, 'conv_proj'):
-                for param in model.encoder.conv_proj.parameters():
-                    param.requires_grad = False
-                patch_proj_found = True
-                print(f"✓ Froze ViT patch projection layer (encoder.conv_proj)")
-                
-            if not patch_proj_found:
-                raise RuntimeError(
-                    f"Cannot find patch projection layer in {name}. "
-                    f"Model structure: {list(model._modules.keys())}. "
-                    f"stop_grad_conv1=True requires identifiable conv_proj layer."
-                )
-            
-        return model, dim_in
     else:
         raise ValueError(f"Unknown backbone: {name}")

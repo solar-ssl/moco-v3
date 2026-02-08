@@ -105,30 +105,6 @@ class MoCoV3(nn.Module):
             k1 = self.projector_k(self.base_model_k(x1))
             k2 = self.projector_k(self.base_model_k(x2))
 
-        # Symmetric contrastive loss (MUST be averaged, not summed!)
-        # MoCo v3 computes loss for both directions and averages them
-        loss = 0.5 * (self.contrastive_loss(q1, k2) + self.contrastive_loss(q2, k1))
-        
-        # Update queue with k2 only (standard MoCo practice for symmetric loss)
-        # Queue updated ONCE per iteration to maintain proper negative sampling
-        if self.use_queue:
-            self._dequeue_and_enqueue(k2)
-            
+        # Loss is symmetric
+        loss = self.contrastive_loss(q1, k2) + self.contrastive_loss(q2, k1)
         return loss
-
-# utils
-@torch.no_grad()
-def concat_all_gather(tensor):
-    """
-    Performs all_gather operation on the provided tensors.
-    *** Warning ***: torch.distributed.all_gather has no gradient.
-    """
-    if not torch.distributed.is_available() or not torch.distributed.is_initialized():
-        return tensor
-
-    tensors_gather = [torch.ones_like(tensor)
-        for _ in range(torch.distributed.get_world_size())]
-    torch.distributed.all_gather(tensors_gather, tensor, async_op=False)
-
-    output = torch.cat(tensors_gather, dim=0)
-    return output

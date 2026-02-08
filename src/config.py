@@ -27,11 +27,9 @@ class Config:
     mlp_dim: int = 4096
     
     # Training settings
-    # ⚠️ WARNING: batch_size=32 with ViT-Base needs ~15GB VRAM per GPU
-    batch_size: int = 32  # Total batch size (too small for pure MoCo v3)
-    epochs: int = 100  # Too short for ViT (needs 300)
-    learning_rate: float = 1.5e-4  # AdamW base LR (for batch=256 reference)
-    warmup_epochs: int = 40
+    batch_size: int = 32  # Total batch size (32 per GPU for 2 GPUs)
+    epochs: int = 100
+    learning_rate: float = 0.015
     momentum: float = 0.99
     temperature: float = 0.2
     weight_decay: float = 1e-4
