@@ -141,9 +141,10 @@ def main_worker(gpu, ngpus_per_node, args, config):
     # Data loading code
     traindir = config.dataset_path
     
+    aug1, aug2 = get_moco_v3_augmentations(config.image_size)
     train_dataset = PV03SSLDataset(
         traindir,
-        TwoCropsTransform(get_moco_v3_augmentations(config.image_size))
+        TwoCropsTransform(aug1, aug2)
     )
 
     if args.multiprocessing_distributed:

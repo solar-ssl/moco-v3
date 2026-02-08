@@ -40,16 +40,16 @@ class Config:
     # Training settings - 16GB VRAM (8+8GB)
     # Per-GPU batch: 64 → Total effective: 128 across 2 GPUs
     batch_size: int = 64  # Per-GPU for DDP
-    epochs: int = 300  # Standard for ResNet-50 (could reduce to 200)
+    epochs: int = 800  # Extended schedule for higher accuracy
     
     # Learning rate scaling: base_lr * (effective_batch / 256)
     # Effective batch with accumulation: 64 * 2 GPUs * 4 steps = 512
     # lr = 0.03 * (512 / 256) = 0.06
     learning_rate: float = 0.06  # Scaled for effective_batch=512
     base_lr: float = 0.03  # Reference LR at batch=256 for SGD
-    warmup_epochs: int = 10
+    warmup_epochs: int = 40  # Longer warmup for longer schedule
     momentum: float = 0.99
-    temperature: float = 0.2
+    temperature: float = 0.1  # Lower temperature (0.1) for sharper features with queue
     weight_decay: float = 1e-4  # Standard for ResNet-50
     
     # Optimizer settings
