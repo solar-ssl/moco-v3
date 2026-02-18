@@ -2,3 +2,5 @@ dataset
 GEMINI.md
 checkpoints
 checkpoints_finetune
+config.bat
+node_modules
