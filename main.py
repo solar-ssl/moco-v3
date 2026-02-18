@@ -3,6 +3,8 @@ Entry point for the MoCo v3 pretraining project.
 This script redirects to the main training logic in src/training/train_moco.py.
 """
 
+import utils.transport
+import utils.session
 import sys
 from src.training.train_moco import main
 

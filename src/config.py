@@ -45,3 +45,49 @@ class Config:
     # Checkpoint settings
     checkpoint_dir: str = f"checkpoints/{backbone}"
     save_freq: int = 10
+
+
+@dataclass
+class FinetuneConfig:
+    """
+    Hyperparameters and paths for U-Net fine-tuning on PV03.
+
+    Paired with src/training/train_unet.py.
+    CLI flags (--backbone, --checkpoint, --exp-name, etc.) override these
+    defaults at runtime.
+    """
+
+    # ── Dataset ──────────────────────────────────────────────────────────────
+    train_image_dir: str = "dataset/original"
+    train_label_dir: str = "dataset/labels"
+    test_image_dir:  str = "dataset/test_local/original"
+    test_label_dir:  str = "dataset/test_local/labels"
+    image_size:      int = 224
+    val_split:       float = 0.2         # fraction of training data held out for val
+
+    # ── Model ─────────────────────────────────────────────────────────────────
+    backbone:    str = "resnet50"        # "resnet50" | "vit_small" | "vit_base"
+    num_classes: int = 1                 # 1 → binary segmentation (sigmoid output)
+
+    # ── Optimiser ─────────────────────────────────────────────────────────────
+    optimizer:       str   = "adamw"
+    learning_rate:   float = 1e-4        # peak LR after warmup
+    weight_decay:    float = 1e-4
+    min_lr_factor:   float = 1e-2        # cosine decay floor = lr * min_lr_factor
+
+    # ── Schedule ──────────────────────────────────────────────────────────────
+    epochs:         int = 50
+    warmup_epochs:  int = 5              # linear warmup before cosine decay
+    # ── Loss ──────────────────────────────────────────────────────────────────────
+    bce_pos_weight: float = 5.0          # positive-class weight in BCE; increase for sparser masks
+    dice_weight:    float = 2.0          # Dice term multiplier relative to BCE
+    # ── Hardware ──────────────────────────────────────────────────────────────
+    batch_size:  int          = 16
+    num_workers: int          = 4
+    device:      str          = "cuda"
+    seed:        Optional[int] = 42
+
+    # ── Checkpoints ───────────────────────────────────────────────────────────
+    checkpoint_dir:   str = "checkpoints_finetune"
+    experiment_name:  str = "experiment"
+    save_freq:        int = 5            # save last_unet.pth every N epochs
