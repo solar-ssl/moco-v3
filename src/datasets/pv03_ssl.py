@@ -22,9 +22,13 @@ class PV03SSLDataset(Dataset):
         self.root_dir = root_dir
         self.transform = transform
         
-        # List all image files in the directory
-        self.image_files = [f for f in os.listdir(root_dir) 
-                           if f.lower().endswith(('.png', '.jpg', '.jpeg', '.tif', '.tiff', '.bmp'))]
+        # Sort to guarantee identical ordering across filesystems and OSes.
+        # os.listdir() returns files in arbitrary filesystem-dependent order
+        # which differs between ext4/NTFS/S3 and can vary between runs.
+        self.image_files = sorted(
+            f for f in os.listdir(root_dir)
+            if f.lower().endswith(('.png', '.jpg', '.jpeg', '.tif', '.tiff', '.bmp'))
+        )
         
         if not self.image_files:
             raise FileNotFoundError(f"No image files found in {root_dir}")
@@ -33,10 +37,21 @@ class PV03SSLDataset(Dataset):
         return len(self.image_files)
 
     def __getitem__(self, idx: int):
-        img_name = os.path.join(self.root_dir, self.image_files[idx])
-        image = Image.open(img_name).convert('RGB')
-
-        if self.transform:
-            image = self.transform(image)
-
-        return image
+        max_retries = 5
+        for attempt in range(max_retries):
+            current_idx = (idx + attempt) % len(self.image_files)
+            img_name = os.path.join(self.root_dir, self.image_files[current_idx])
+            try:
+                image = Image.open(img_name).convert('RGB')
+                if self.transform:
+                    image = self.transform(image)
+                return image
+            except Exception as exc:
+                print(
+                    f"[PV03SSLDataset] Warning: could not load '{img_name}': {exc}. "
+                    f"Trying next image (attempt {attempt + 1}/{max_retries})."
+                )
+        raise RuntimeError(
+            f"Failed to load {max_retries} consecutive images starting at index {idx}. "
+            f"Check your dataset for corrupt files."
+        )

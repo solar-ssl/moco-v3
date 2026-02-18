@@ -2,8 +2,6 @@
 Logging utilities for training.
 """
 
-import time
-
 class AverageMeter:
     """Computes and stores the average and current value."""
     def __init__(self, name, fmt=':f'):
@@ -39,6 +37,6 @@ class ProgressMeter:
         print('\t'.join(entries))
 
     def _get_batch_fmtstr(self, num_batches):
-        num_digits = len(str(num_batches // 1))
+        num_digits = len(str(num_batches))
         fmt = '{:' + str(num_digits) + 'd}'
         return '[' + fmt + '/' + fmt.format(num_batches) + ']'

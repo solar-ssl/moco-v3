@@ -5,4 +5,6 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.10"
 authors = [{ name = "Usama Mangi", email = "usamapk7861@gmail.com" }]
-dependencies = []
+dependencies = [
+    "timm>=1.0.24",
+]
